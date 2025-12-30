@@ -1,13 +1,15 @@
 {
-  "name": "clufin-key-server",
+  "name": "brainrot-key-verification",
   "version": "1.0.0",
-  "description": "Servidor de verificação de keys",
+  "description": "Servidor de verificação de keys para Clufin Auto Joiner",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "keywords": ["roblox", "key", "verification"],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5"
+    "express": "^4.18.2"
   }
 }
