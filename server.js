@@ -1,150 +1,186 @@
 const express = require('express');
-const cors = require('cors');
 const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DATABASE_FILE = './keys.json';
 
-app.use(cors());
+// Middleware
 app.use(express.json());
 
-// Carrega banco de dados
-function loadDatabase() {
+// CORS para aceitar requisições do Roblox
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
+
+// Funções do banco de dados
+function loadDB() {
     try {
         if (fs.existsSync(DATABASE_FILE)) {
-            return JSON.parse(fs.readFileSync(DATABASE_FILE, 'utf8'));
+            const data = fs.readFileSync(DATABASE_FILE, 'utf8');
+            return JSON.parse(data);
         }
     } catch (error) {
-        console.error('Erro ao carregar database:', error);
+        console.error('Erro ao carregar DB:', error);
     }
     return { keys: {}, hwids: {} };
 }
 
-// Salva banco de dados
-function saveDatabase(data) {
-    fs.writeFileSync(DATABASE_FILE, JSON.stringify(data, null, 2));
+function saveDB(data) {
+    try {
+        fs.writeFileSync(DATABASE_FILE, JSON.stringify(data, null, 2));
+        return true;
+    } catch (error) {
+        console.error('Erro ao salvar DB:', error);
+        return false;
+    }
 }
 
-// Verifica se key é válida
-function isKeyValid(keyData) {
-    if (!keyData || !keyData.active) return false;
-    if (keyData.expiresAt && Date.now() > keyData.expiresAt) return false;
-    return true;
-}
-
-// ENDPOINT: Verificar Key
-app.get('/verify-key', (req, res) => {
+// Endpoint principal de verificação (GET)
+app.get('/', (req, res) => {
     const { key, hwid } = req.query;
     
-    if (!key) {
-        return res.json({ valid: false, reason: 'Key não fornecida' });
+    console.log(`[VERIFICAÇÃO] Key: ${key}, HWID: ${hwid}, Time: ${new Date().toISOString()}`);
+    
+    // Validação básica
+    if (!key || !hwid) {
+        console.log('[ERRO] Key ou HWID faltando');
+        return res.json({
+            valid: false,
+            reason: 'Key ou HWID não fornecido'
+        });
     }
     
-    const db = loadDatabase();
+    const db = loadDB();
     const keyData = db.keys[key];
     
+    // Key não existe
     if (!keyData) {
-        return res.json({ valid: false, reason: 'Key não encontrada' });
+        console.log(`[ERRO] Key não encontrada: ${key}`);
+        return res.json({
+            valid: false,
+            reason: 'Key inválida ou não encontrada'
+        });
     }
     
+    // Key não está ativa
     if (!keyData.active) {
-        return res.json({ valid: false, reason: 'Key desativada' });
+        console.log(`[ERRO] Key desativada: ${key}`);
+        return res.json({
+            valid: false,
+            reason: 'Key foi desativada'
+        });
     }
     
-    if (keyData.expiresAt && Date.now() > keyData.expiresAt) {
+    // Verificar expiração
+    const now = Date.now();
+    if (keyData.expiresAt && keyData.expiresAt < now) {
+        console.log(`[ERRO] Key expirada: ${key}`);
         keyData.active = false;
-        saveDatabase(db);
-        return res.json({ valid: false, reason: 'Key expirada' });
+        saveDB(db);
+        return res.json({
+            valid: false,
+            reason: 'Key expirou'
+        });
     }
     
-    // HWID Check
-    if (hwid) {
-        if (keyData.hwid && keyData.hwid !== hwid) {
-            return res.json({ 
-                valid: false, 
-                reason: 'Key vinculada a outro dispositivo' 
+    // Verificar HWID
+    if (keyData.hwid) {
+        // Key já tem HWID registrado
+        if (keyData.hwid !== hwid) {
+            console.log(`[ERRO] HWID diferente. Registrado: ${keyData.hwid}, Tentando: ${hwid}`);
+            return res.json({
+                valid: false,
+                reason: 'Key já está vinculada a outro dispositivo'
             });
         }
-        
-        if (!keyData.hwid) {
-            keyData.hwid = hwid;
-            db.hwids[hwid] = { key: key, linkedAt: Date.now() };
-            saveDatabase(db);
-        }
+    } else {
+        // Primeira vez usando a key - registrar HWID
+        console.log(`[INFO] Registrando HWID para key ${key}: ${hwid}`);
+        keyData.hwid = hwid;
+        keyData.firstUsedAt = now;
+        saveDB(db);
     }
     
+    // Atualizar último uso
+    keyData.lastUsedAt = now;
+    saveDB(db);
+    
+    // Key válida!
+    console.log(`[SUCESSO] Key válida: ${key}`);
     return res.json({
         valid: true,
-        key: key,
         expiresAt: keyData.expiresAt,
-        username: keyData.usedByUsername || null
+        daysLeft: Math.ceil((keyData.expiresAt - now) / (1000 * 60 * 60 * 24)),
+        username: keyData.usedByUsername || 'Usuário'
     });
 });
 
-// ENDPOINT: Página Inicial
-app.get('/', (req, res) => {
-    res.send(`
-        <html>
-        <head>
-            <title>Clufin Key System</title>
-            <style>
-                body {
-                    font-family: Arial;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    height: 100vh;
-                    margin: 0;
-                }
-                .container {
-                    background: rgba(0,0,0,0.3);
-                    padding: 40px;
-                    border-radius: 20px;
-                    text-align: center;
-                }
-                h1 { font-size: 3em; margin: 0; }
-                .status { 
-                    background: rgba(0,255,0,0.3);
-                    padding: 20px;
-                    border-radius: 10px;
-                    margin-top: 20px;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🔐 Clufin Key System</h1>
-                <div class="status">
-                    <h2>✅ Sistema Online</h2>
-                    <p>Servidor funcionando corretamente!</p>
-                </div>
-            </div>
-        </body>
-        </html>
-    `);
+// Endpoint para resetar HWID (apenas para admins)
+app.post('/reset-hwid', (req, res) => {
+    const { key, adminPassword } = req.body;
+    
+    // Senha de admin simples (MUDE ISSO!)
+    if (adminPassword !== 'admin123') {
+        return res.json({ success: false, message: 'Senha incorreta' });
+    }
+    
+    const db = loadDB();
+    const keyData = db.keys[key];
+    
+    if (!keyData) {
+        return res.json({ success: false, message: 'Key não encontrada' });
+    }
+    
+    keyData.hwid = null;
+    saveDB(db);
+    
+    console.log(`[ADMIN] HWID resetado para key: ${key}`);
+    return res.json({ success: true, message: 'HWID resetado com sucesso' });
 });
 
-// ENDPOINT: Estatísticas
-app.get('/stats', (req, res) => {
-    const db = loadDatabase();
-    const keys = Object.values(db.keys);
+// Endpoint para listar keys (apenas para debug)
+app.get('/debug/keys', (req, res) => {
+    const db = loadDB();
+    const keyList = Object.values(db.keys).map(k => ({
+        key: k.key,
+        active: k.active,
+        hasHWID: !!k.hwid,
+        expiresAt: new Date(k.expiresAt).toLocaleString('pt-BR'),
+        usedBy: k.usedByUsername
+    }));
     
     res.json({
-        total: keys.length,
-        active: keys.filter(k => k.active).length,
-        expired: keys.filter(k => k.expiresAt && k.expiresAt <= Date.now()).length
+        total: keyList.length,
+        keys: keyList
+    });
+});
+
+// Health check
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'online',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime()
     });
 });
 
 // Iniciar servidor
 app.listen(PORT, () => {
-    console.log(`✅ Servidor online na porta ${PORT}`);
+    console.log(`🚀 Servidor de verificação rodando na porta ${PORT}`);
+    console.log(`📝 Endpoint de verificação: http://localhost:${PORT}/?key=KEY&hwid=HWID`);
+    console.log(`💾 Arquivo de banco de dados: ${DATABASE_FILE}`);
+    
+    // Criar arquivo de keys se não existir
+    if (!fs.existsSync(DATABASE_FILE)) {
+        console.log('📁 Criando arquivo de banco de dados...');
+        saveDB({ keys: {}, hwids: {} });
+    }
 });
-
-// Criar banco de dados se não existir
-if (!fs.existsSync(DATABASE_FILE)) {
-    saveDatabase({ keys: {}, hwids: {} });
-}
